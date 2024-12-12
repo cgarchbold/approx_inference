@@ -1,1 +1,1 @@
-# Exact Inference
+# Approximate Inference
