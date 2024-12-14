@@ -138,7 +138,7 @@ def train(epochs=100, learning_rate=0.0001, batch_size=64, experiment_name="expe
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a Bayesian Vision Transformer (bayesViT) model.")
-    parser.add_argument('--epochs', type=int, default=500, help="Number of epochs to train the model.")
+    parser.add_argument('--epochs', type=int, default=400, help="Number of epochs to train the model.")
     parser.add_argument('--learning_rate', type=float, default=0.001, help="Learning rate for the optimizer.")
     parser.add_argument('--batch_size', type=int, default=128, help="Batch size for training.")
     parser.add_argument('--experiment_name', type=str, default="Dropout0.1_test1", help="Name of the experiment. A directory with this name will be created.")
