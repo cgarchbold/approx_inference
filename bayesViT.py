@@ -87,7 +87,7 @@ class Transformer(nn.Module):
     def forward(self, x):
         for attn, drop, ff in self.layers:
             x = attn(x) + x
-            x = drop(x)
+            #x = drop(x)
             x = ff(x) + x
         return x
 
@@ -122,6 +122,15 @@ class bayesViT(nn.Module):
             nn.Linear(dim, num_classes)
         )
 
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            nn.init.xavier_uniform_(module.weight)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.LayerNorm):
+            nn.init.ones_(module.weight)
+            nn.init.zeros_(module.bias)
+
     def forward(self, img):
         x = self.to_patch_embedding(img)
         b, n, _ = x.shape
@@ -138,3 +147,4 @@ class bayesViT(nn.Module):
 
         x = self.to_latent(x)
         return self.mlp_head(x)
+    

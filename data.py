@@ -3,13 +3,13 @@ import torchvision
 from torch.utils.data import DataLoader, random_split
 
 # Function to get dataloaders with training and validation split
-def get_dataloaders(batch_size, transform, validation_split=0.2, random_seed=42):
+def get_dataloaders(batch_size, transform_train, transform_test, validation_split=0.2, random_seed=42):
     # Set random seed for reproducibility
     torch.manual_seed(random_seed)
     
     # Load the CIFAR-10 dataset
     trainset = torchvision.datasets.CIFAR10(root='./data', train=True,
-                                            download=True, transform=transform)
+                                            download=True, transform=transform_train)
     
     # Compute the size of the validation set
     num_train = len(trainset)
@@ -26,7 +26,7 @@ def get_dataloaders(batch_size, transform, validation_split=0.2, random_seed=42)
                            shuffle=False, num_workers=2)
     
     testset = torchvision.datasets.CIFAR10(root='./data', train=False,
-                                           download=True, transform=transform)
+                                           download=True, transform=transform_test)
     testloader = DataLoader(testset, batch_size=batch_size,
                             shuffle=False, num_workers=2)
     

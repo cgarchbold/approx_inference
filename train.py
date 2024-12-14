@@ -6,25 +6,37 @@ import torchvision
 import torchvision.transforms as transforms
 from tqdm import tqdm
 import csv
+
 from bayesViT import bayesViT
 from data import get_dataloaders
 from plot import plot_loss_accuracy
+from randomaug import RandAugment
 
-def train(epochs=100, learning_rate=0.0001, batch_size=64, experiment_name="experiment", dropout_rate=0.1, patience=5, lr_decay_step=10, lr_decay_gamma=0.5):
-    transform = transforms.Compose(
+def train(epochs=100, learning_rate=0.0001, batch_size=64, experiment_name="experiment", dropout_rate=0.1, patience=5, min_lr = 1e-5):
+
+    transform_train = transforms.Compose(
         [transforms.ToTensor(),
-         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+         transforms.RandomHorizontalFlip(),
+         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))])
+    
+    # Choose 2 random augmentations with magnitude 14
+    transform_train.transforms.insert(0, RandAugment(2, 14))
+    
+    transform_test = transforms.Compose(
+        [transforms.ToTensor(),
+         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))])
 
-    trainloader, valloader, testloader, classes = get_dataloaders(batch_size, transform)
+
+    trainloader, valloader, testloader, classes = get_dataloaders(batch_size, transform_train=transform_train, transform_test=transform_test)
 
     model = bayesViT(
-        image_size=32, patch_size=4, num_classes=10, dim=128, depth=6, heads=4,
-        mlp_dim=1024, pool='cls', channels=3, dim_head=32, dropout=dropout_rate, emb_dropout=dropout_rate
+        image_size=32, patch_size=4, num_classes=10, dim=384, depth=6, heads=8,
+        mlp_dim=384, pool='cls', channels=3, dim_head=64, dropout=dropout_rate, emb_dropout=dropout_rate
     ).cuda()
 
     model.train()
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_decay_step, gamma=lr_decay_gamma)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay = 1e-4)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=min_lr)
     criterion = nn.CrossEntropyLoss()
 
     # Create directory for experiment
@@ -74,7 +86,7 @@ def train(epochs=100, learning_rate=0.0001, batch_size=64, experiment_name="expe
 
         print(f"Epoch [{epoch + 1}/{epochs}], Loss: {epoch_loss:.4f}, Accuracy: {epoch_accuracy:.2f}%")
 
-        # Validation step (using dropout at test time for Monte Carlo estimates)
+        # Validation step 
         model.eval()
         val_running_loss = 0.0
         val_correct = 0
@@ -121,26 +133,19 @@ def train(epochs=100, learning_rate=0.0001, batch_size=64, experiment_name="expe
 
     print("Training Complete!")
 
-    # Save the final model
-    print("Saving final model....")
-    model_save_path = os.path.join(experiment_dir, "model.pth")
-    torch.save(model.state_dict(), model_save_path)
-    print(f"Model saved at {model_save_path}")
-
     print("Plotting...")
     plot_loss_accuracy(csv_file=csv_file, dir=experiment_dir)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a Bayesian Vision Transformer (bayesViT) model.")
-    parser.add_argument('--epochs', type=int, default=250, help="Number of epochs to train the model.")
+    parser.add_argument('--epochs', type=int, default=500, help="Number of epochs to train the model.")
     parser.add_argument('--learning_rate', type=float, default=0.001, help="Learning rate for the optimizer.")
-    parser.add_argument('--batch_size', type=int, default=64, help="Batch size for training.")
-    parser.add_argument('--experiment_name', type=str, default="Dropout0.1", help="Name of the experiment. A directory with this name will be created.")
+    parser.add_argument('--batch_size', type=int, default=128, help="Batch size for training.")
+    parser.add_argument('--experiment_name', type=str, default="Dropout0.1_test1", help="Name of the experiment. A directory with this name will be created.")
     parser.add_argument('--dropout_rate', type=float, default=0.1, help="Dropout rate for the model (applies to both dropout and emb_dropout).")
-    parser.add_argument('--patience', type=int, default=5, help="Number of epochs with no improvement after which training will be stopped.")
-    parser.add_argument('--lr_decay_step', type=int, default=50, help="Number of epochs between learning rate decays.")
-    parser.add_argument('--lr_decay_gamma', type=float, default=0.1, help="Factor by which the learning rate will be decayed.")
+    parser.add_argument('--patience', type=int, default=35, help="Number of epochs with no improvement after which training will be stopped.")
 
     args = parser.parse_args()
 
-    train(epochs=args.epochs, learning_rate=args.learning_rate, batch_size=args.batch_size, experiment_name=args.experiment_name, dropout_rate=args.dropout_rate, patience=args.patience, lr_decay_step=args.lr_decay_step, lr_decay_gamma=args.lr_decay_gamma)
+    train(epochs=args.epochs, learning_rate=args.learning_rate, batch_size=args.batch_size, experiment_name=args.experiment_name, 
+          dropout_rate=args.dropout_rate, patience=args.patience)
