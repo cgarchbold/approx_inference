@@ -87,7 +87,7 @@ class Transformer(nn.Module):
     def forward(self, x):
         for attn, drop, ff in self.layers:
             x = attn(x) + x
-            #x = drop(x)
+            x = drop(x)
             x = ff(x) + x
         return x
 

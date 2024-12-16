@@ -2,45 +2,73 @@ import argparse
 import os
 import torch
 import torch.nn as nn
+import numpy as np
 import torchvision
 import torchvision.transforms as transforms
 from tqdm import tqdm
 import csv
 
+
 from bayesViT import bayesViT
 from data import get_dataloaders
 from plot import plot_loss_accuracy
 from randomaug import RandAugment
+from autoaugment import CIFAR10Policy
+from dataaug import CutMix, MixUp
 
-def train(epochs=100, learning_rate=0.0001, batch_size=64, experiment_name="experiment", dropout_rate=0.1, patience=5, min_lr = 1e-5):
+class LabelSmoothingCrossEntropyLoss(nn.Module):
+    def __init__(self, classes, smoothing=0.0, dim=-1):
+        super(LabelSmoothingCrossEntropyLoss, self).__init__()
+        self.confidence = 1.0 - smoothing
+        self.smoothing = smoothing
+        self.cls = classes
+        self.dim = dim
+
+    def forward(self, pred, target):
+        pred = pred.log_softmax(dim=self.dim)
+        with torch.no_grad():
+            true_dist = torch.zeros_like(pred)
+            true_dist.fill_(self.smoothing / (self.cls - 1))
+            true_dist.scatter_(1, target.data.unsqueeze(1), self.confidence)
+        return torch.mean(torch.sum(-true_dist * pred, dim=self.dim))    
+
+def train(args):
 
     transform_train = transforms.Compose(
-        [transforms.ToTensor(),
+        [CIFAR10Policy(),
+         transforms.ToTensor(),
          transforms.RandomHorizontalFlip(),
          transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))])
     
     # Choose 2 random augmentations with magnitude 14
-    transform_train.transforms.insert(0, RandAugment(2, 14))
+    #transform_train.transforms.insert(0, RandAugment(2, 14))
+    transform_train.transforms.insert(0, CIFAR10Policy())
     
     transform_test = transforms.Compose(
         [transforms.ToTensor(),
          transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))])
+    
+    if args.cutmix:
+        cutmix = CutMix(32, beta=1.)
+    if args.mixup:
+        mixup = MixUp(alpha=1.)
 
-
-    trainloader, valloader, testloader, classes = get_dataloaders(batch_size, transform_train=transform_train, transform_test=transform_test)
+    trainloader, valloader, testloader, classes = get_dataloaders(args.batch_size, transform_train=transform_train, transform_test=transform_test)
 
     model = bayesViT(
         image_size=32, patch_size=4, num_classes=10, dim=384, depth=6, heads=8,
-        mlp_dim=384, pool='cls', channels=3, dim_head=64, dropout=dropout_rate, emb_dropout=dropout_rate
+        mlp_dim=384, pool='cls', channels=3, dim_head=64, dropout=args.dropout_rate, emb_dropout=args.dropout_rate
     ).cuda()
 
     model.train()
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay = 1e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=min_lr)
-    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay = 1e-4)
+    #scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=0.01, epochs=args.epochs, steps_per_epoch=len(trainloader))
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0 = len(trainloader)*5, T_mult=5, eta_min=1e-5)
+    #scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-5)
+    criterion = LabelSmoothingCrossEntropyLoss(10, smoothing=0.1)
 
     # Create directory for experiment
-    experiment_dir = f"./results/{experiment_name}"
+    experiment_dir = f"./results/{args.experiment_name}"
     os.makedirs(experiment_dir, exist_ok=True)
     
     # CSV setup
@@ -54,22 +82,32 @@ def train(epochs=100, learning_rate=0.0001, batch_size=64, experiment_name="expe
     epochs_without_improvement = 0
 
     # Training loop
-    for epoch in range(epochs):
+    for epoch in range(args.epochs):
         running_loss = 0.0
         correct = 0
         total = 0
 
         # Iterate over the training data
-        for inputs, labels in tqdm(trainloader, desc=f"Epoch {epoch + 1}/{epochs}", ncols=100):
+        for inputs, labels in tqdm(trainloader, desc=f"Epoch {epoch + 1}/{args.epochs}", ncols=100):
             inputs, labels = inputs.cuda(), labels.cuda()  # Move data to GPU
 
             optimizer.zero_grad()  # Zero the gradients
 
-            # Forward pass
-            outputs = model(inputs)
+            if args.cutmix or args.mixup:
+                if args.cutmix:
+                    img, label, rand_label, lambda_= cutmix((inputs, labels))
+                elif args.mixup:
+                    if np.random.rand() <= 0.8:
+                        img, label, rand_label, lambda_ = mixup((inputs, labels))
+                    else:
+                        img, label, rand_label, lambda_ = inputs, labels, torch.zeros_like(labels), 1.
+                outputs = model(img)
+                loss = criterion(outputs, label)*lambda_ + criterion(outputs, rand_label)*(1.-lambda_)
+            else:
+                # forward + backward + optimize
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
 
-            # Calculate loss
-            loss = criterion(outputs, labels)
             loss.backward()  # Backward pass
 
             optimizer.step()  # Update the weights
@@ -84,7 +122,7 @@ def train(epochs=100, learning_rate=0.0001, batch_size=64, experiment_name="expe
         epoch_loss = running_loss / len(trainloader)
         epoch_accuracy = 100 * correct / total
 
-        print(f"Epoch [{epoch + 1}/{epochs}], Loss: {epoch_loss:.4f}, Accuracy: {epoch_accuracy:.2f}%")
+        print(f"Epoch [{epoch + 1}/{args.epochs}], Loss: {epoch_loss:.4f}, Accuracy: {epoch_accuracy:.2f}%")
 
         # Validation step 
         model.eval()
@@ -124,7 +162,7 @@ def train(epochs=100, learning_rate=0.0001, batch_size=64, experiment_name="expe
             epochs_without_improvement += 1
 
         # Early stopping: Stop if no improvement for 'patience' epochs
-        if epochs_without_improvement >= patience:
+        if epochs_without_improvement >= args.patience:
             print(f"Early stopping triggered after {epoch + 1} epochs.")
             break
 
@@ -138,14 +176,15 @@ def train(epochs=100, learning_rate=0.0001, batch_size=64, experiment_name="expe
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a Bayesian Vision Transformer (bayesViT) model.")
-    parser.add_argument('--epochs', type=int, default=400, help="Number of epochs to train the model.")
+    parser.add_argument('--epochs', type=int, default=500, help="Number of epochs to train the model.")
     parser.add_argument('--learning_rate', type=float, default=0.001, help="Learning rate for the optimizer.")
     parser.add_argument('--batch_size', type=int, default=128, help="Batch size for training.")
-    parser.add_argument('--experiment_name', type=str, default="Dropout0.1_test1", help="Name of the experiment. A directory with this name will be created.")
+    parser.add_argument('--experiment_name', type=str, default="Dropout0.1_test3", help="Name of the experiment. A directory with this name will be created.")
     parser.add_argument('--dropout_rate', type=float, default=0.1, help="Dropout rate for the model (applies to both dropout and emb_dropout).")
-    parser.add_argument('--patience', type=int, default=35, help="Number of epochs with no improvement after which training will be stopped.")
+    parser.add_argument('--patience', type=int, default=100, help="Number of epochs with no improvement after which training will be stopped.")
+    parser.add_argument("--cutmix", action="store_true")
+    parser.add_argument("--mixup", action="store_true")
 
     args = parser.parse_args()
 
-    train(epochs=args.epochs, learning_rate=args.learning_rate, batch_size=args.batch_size, experiment_name=args.experiment_name, 
-          dropout_rate=args.dropout_rate, patience=args.patience)
+    train(args)
