@@ -8,6 +8,7 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 import pandas as pd
 from pathlib import Path
 import torchvision.transforms as transforms
+from tqdm import tqdm
 
 from bayesViT import bayesViT
 from data import get_dataloaders
@@ -29,6 +30,19 @@ def save_softmax_to_csv(probabilities, targets, output_path):
 
 def test(args):
     # Load data
+    transform_train = transforms.Compose(
+        [transforms.ToTensor(),
+         transforms.RandomHorizontalFlip(),
+         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))])
+    
+    # Choose 2 random augmentations with magnitude 14
+    #transform_train.transforms.insert(0, RandAugment(2, 14))
+    #transform_train.transforms.insert(0, CIFAR10Policy())
+    
+    transform_test = transforms.Compose(
+        [transforms.ToTensor(),
+         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))])
+
     trainloader, valloader, testloader, classes = get_dataloaders(
         args.batch_size, transform_train=transform_train, transform_test=transform_test
     )
@@ -40,12 +54,13 @@ def test(args):
     )
 
     # Load model weights
-    checkpoint = torch.load(args.path, map_location='cpu')
-    model.load_state_dict(checkpoint['model_state_dict'])
+    ckpt_path = os.path.join('./results/', args.experiment_name,'best_model.pth')
+    checkpoint = torch.load(ckpt_path, map_location='cpu')
+    model.load_state_dict(checkpoint)
 
     # Set up output paths
-    deterministic_output_path = f'results/{args.experiment_name}_deterministic.csv'
-    probabilistic_output_path = f'results/{args.experiment_name}_probabilistic.csv'
+    deterministic_output_path = f'results/{args.experiment_name}./deterministic.csv'
+    probabilistic_output_path = f'results/{args.experiment_name}./probabilistic.csv'
 
     # Device setup
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -56,7 +71,7 @@ def test(args):
     deterministic_probs, targets = [], []
 
     with torch.no_grad():
-        for images, labels in testloader:
+        for images, labels in tqdm(testloader):
             images, labels = images.to(device), labels.to(device)
             outputs = model(images)
             probabilities = F.softmax(outputs, dim=1)
@@ -110,13 +125,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a Bayesian Vision Transformer (bayesViT) model.")
     parser.add_argument('--epochs', type=int, default=400, help="Number of epochs to train the model.")
     parser.add_argument('--learning_rate', type=float, default=0.001, help="Learning rate for the optimizer.")
-    parser.add_argument('--batch_size', type=int, default=128, help="Batch size for training.")
-    parser.add_argument('--experiment_name', type=str, default="Dropout0.1_test2", help="Name of the experiment. A directory with this name will be created.")
+    parser.add_argument('--batch_size', type=int, default=1, help="Batch size for training.")
+    parser.add_argument('--experiment_name', type=str, default="FINAL_BayesViT_dropout0.1", help="Name of the experiment. A directory with this name will be created.")
     parser.add_argument('--dropout_rate', type=float, default=0.1, help="Dropout rate for the model (applies to both dropout and emb_dropout).")
-    parser.add_argument('--patience', type=int, default=35, help="Number of epochs with no improvement after which training will be stopped.")
-    parser.add_argument("--cutmix", action="store_true")
-    parser.add_argument("--mixup", action="store_true")
-
+    parser.add_argument('--num_samples', type=int, default=1000, help="Number of samples to take during variational inference")
     args = parser.parse_args()
 
     test(args)

@@ -63,8 +63,8 @@ def train(args):
     model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay = 1e-4)
     #scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=0.01, epochs=args.epochs, steps_per_epoch=len(trainloader))
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0 = len(trainloader)*5, T_mult=5, eta_min=1e-5)
-    #scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-5)
+    #scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0 = len(trainloader)*5, T_mult=5, eta_min=1e-5)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-5)
     criterion = LabelSmoothingCrossEntropyLoss(10, smoothing=0.1)
 
     # Create directory for experiment
@@ -176,7 +176,7 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a Bayesian Vision Transformer (bayesViT) model.")
-    parser.add_argument('--epochs', type=int, default=500, help="Number of epochs to train the model.")
+    parser.add_argument('--epochs', type=int, default=400, help="Number of epochs to train the model.")
     parser.add_argument('--learning_rate', type=float, default=0.001, help="Learning rate for the optimizer.")
     parser.add_argument('--batch_size', type=int, default=128, help="Batch size for training.")
     parser.add_argument('--experiment_name', type=str, default="Dropout0.1_test3", help="Name of the experiment. A directory with this name will be created.")
