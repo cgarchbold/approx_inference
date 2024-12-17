@@ -9,6 +9,7 @@ import pandas as pd
 from pathlib import Path
 import torchvision.transforms as transforms
 from tqdm import tqdm
+from sklearn.calibration import calibration_curve
 
 from bayesViT import bayesViT
 from data import get_dataloaders
@@ -89,46 +90,62 @@ def test(args):
     # Save deterministic probabilities to CSV
     save_softmax_to_csv(deterministic_probs, targets, deterministic_output_path)
 
-    # Evaluation in probabilistic mode
+    #Evaluation in probabilistic mode
     model.train()
-    uncertainty_scores, mutual_info_scores = [], []
 
-    for images, labels in testloader:
-        images, labels = images.to(device), labels.to(device)
-        outputs = []
-        for _ in range(args.num_samples):
-            outputs.append(model(images))
-        outputs = torch.stack(outputs)  # Shape: [num_samples, batch_size, num_classes]
+    def compute_entropy(probabilities):
+        # Clip probabilities to avoid log(0) which is undefined
+        probabilities = torch.clamp(probabilities, min=1e-10, max=1-1e-10)
+        return -torch.sum(probabilities * torch.log(probabilities), dim=1)
 
-        # Compute probabilistic metrics
-        mean_output = torch.mean(outputs, dim=0)  # Mean prediction
-        variance_output = torch.var(outputs, dim=0)  # Variance
+    # Initialize variables to accumulate metrics over the entire test set
+    total_entropy = 0.0
+    total_variance = 0.0
+    total_samples = 0
 
-        probabilities = F.softmax(mean_output, dim=1).cpu().numpy()
-        uncertainty = variance_output.sum(dim=1).cpu().numpy()  # Summed variance as uncertainty
-        mutual_info = (F.softmax(outputs, dim=2) * F.log_softmax(outputs, dim=2)).mean(0).sum(1).cpu().numpy()
+    with torch.no_grad():
+        for images, labels in tqdm(testloader):
+            images, labels = images.to(device), labels.to(device)
+            
+            # Collect predictions from multiple forward passes with dropout
+            outputs = []
+            for _ in range(args.num_samples):
+                outputs.append(F.softmax(model(images), dim=1))
+            
+            outputs = torch.stack(outputs)  # Shape: [num_samples, batch_size, num_classes]
+            
+            # Compute mean and variance across MC samples
+            mean_output = torch.mean(outputs, dim=0)  # Mean prediction
+            variance_output = torch.var(outputs, dim=0)  # Variance
 
-        uncertainty_scores.extend(uncertainty)
-        mutual_info_scores.extend(mutual_info)
+            # 1. Compute entropy for each sample in the batch
+            entropy = compute_entropy(mean_output)
+            
+            # 2. Compute average variance across classes
+            average_variance = torch.mean(variance_output, dim=0)
 
-    # Save probabilistic results
-    probabilistic_df = pd.DataFrame({
-        'uncertainty': uncertainty_scores,
-        'mutual_information': mutual_info_scores,
-        'target': targets
-    })
-    probabilistic_df.to_csv(probabilistic_output_path, index=False)
+            # Accumulate the metrics for the whole test set
+            total_entropy += entropy.sum().item()  # Sum entropy for all samples in the batch
+            total_variance += average_variance.sum().item()  # Sum average variance across classes
+            total_samples += images.size(0)  # Batch size (number of samples in this batch)
 
-    print(f"Probabilistic results saved to {probabilistic_output_path}")
+    # Compute the average metrics over the entire test set
+    avg_entropy = total_entropy / total_samples
+    avg_variance = total_variance / total_samples
+
+    # Print the average metrics
+    print(f"Average Entropy over the Test Set: {avg_entropy}")
+    print(f"Average Variance over the Test Set: {avg_variance}")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a Bayesian Vision Transformer (bayesViT) model.")
     parser.add_argument('--epochs', type=int, default=400, help="Number of epochs to train the model.")
     parser.add_argument('--learning_rate', type=float, default=0.001, help="Learning rate for the optimizer.")
     parser.add_argument('--batch_size', type=int, default=1, help="Batch size for training.")
-    parser.add_argument('--experiment_name', type=str, default="FINAL_BayesViT_dropout0.1", help="Name of the experiment. A directory with this name will be created.")
-    parser.add_argument('--dropout_rate', type=float, default=0.1, help="Dropout rate for the model (applies to both dropout and emb_dropout).")
-    parser.add_argument('--num_samples', type=int, default=1000, help="Number of samples to take during variational inference")
+    parser.add_argument('--experiment_name', type=str, default="FINAL_BayesViT_dropout0.3", help="Name of the experiment. A directory with this name will be created.")
+    parser.add_argument('--dropout_rate', type=float, default=0.3, help="Dropout rate for the model (applies to both dropout and emb_dropout).")
+    parser.add_argument('--num_samples', type=int, default=10, help="Number of samples to take during variational inference")
     args = parser.parse_args()
 
     test(args)
