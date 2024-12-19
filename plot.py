@@ -7,6 +7,17 @@ def plot_loss_accuracy(csv_file, dir='./results/'):
     # Plot the training and validation metrics
     data = pd.read_csv(csv_file)
 
+    # Set default font sizes for plots
+    plt.rcParams.update({
+        'font.size': 32,          # Default font size for text
+        'axes.titlesize': 32,     # Font size for plot titles
+        'axes.labelsize': 32,     # Font size for axis labels
+        'xtick.labelsize': 28,    # Font size for x-axis tick labels
+        'ytick.labelsize': 28,    # Font size for y-axis tick labels
+        'legend.fontsize': 32     # Font size for legend
+    })
+
+
     # Plot training and validation loss
     plt.figure(figsize=(16, 9))
     plt.plot(data['Epoch'], data['Training Loss'], label='Training Loss', color='blue', alpha=0.7)
